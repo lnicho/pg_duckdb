@@ -25,6 +25,7 @@ extern "C" {
 }
 
 #include "pgduckdb/vendor/pg_list.hpp"
+#include "pgduckdb/pgduckdb_hooks.hpp"
 
 #include <cmath>
 
@@ -63,7 +64,15 @@ PostgresTableReader::InitUnsafe(const char *table_scan_query, bool count_tuples_
 
 	char persistence = get_rel_persistence(rte->relid);
 
-	PlannedStmt *planned_stmt = standard_planner(query, table_scan_query, 0, nullptr);
+	/*
+	 * Use PlanQueryWithoutDuckdb instead of standard_planner to ensure that other
+	 * extensions registered in the planner_hook chain (e.g., TimescaleDB) are still
+	 * called. TimescaleDB initializes per-query state in its planner hook that is
+	 * later required by its create_upper_paths_hook callback inside standard_planner.
+	 * Bypassing it by calling standard_planner directly results in a NULL pointer
+	 * dereference (SIGSEGV) when that callback fires.
+	 */
+	PlannedStmt *planned_stmt = pgduckdb::PlanQueryWithoutDuckdb(query, table_scan_query, 0, nullptr);
 
 	table_scan_query_desc = CreateQueryDesc(planned_stmt, table_scan_query, GetActiveSnapshot(), InvalidSnapshot,
 	                                        None_Receiver, nullptr, nullptr, 0);

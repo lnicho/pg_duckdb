@@ -5,6 +5,7 @@
 #include "pgduckdb/pg/string_utils.hpp"
 #include "pgduckdb/utility/cpp_wrapper.hpp"
 #include "pgduckdb/pgduckdb_duckdb.hpp"
+#include "pgduckdb/pgduckdb_hooks.hpp"
 
 extern "C" {
 #include "postgres.h"
@@ -92,7 +93,16 @@ ListDuckDBCreateSecretQueries() {
 		WHERE fdw.fdwname = 'duckdb' AND fs.srvtype != 'motherduck';
 	)";
 
+	/*
+	 * Bypass pg_duckdb's planner hook while executing this SPI query. This
+	 * function is called from within DuckdbPlannerHook_Cpp (via DuckdbPrepare →
+	 * GetConnection → LoadSecrets), so SPI_exec would otherwise re-invoke the
+	 * planner hook chain causing re-entrant DuckDB planning for this internal
+	 * catalog query.
+	 */
+	pgduckdb::SetBypassHook(true);
 	auto ret = SPI_exec(query, 0);
+	pgduckdb::SetBypassHook(false);
 	if (ret != SPI_OK_SELECT) {
 		elog(ERROR, "Can't list DuckDB secrets: %s", SPI_result_code_string(ret));
 	}
