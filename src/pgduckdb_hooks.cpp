@@ -39,6 +39,21 @@ extern "C" {
 
 static planner_hook_type prev_planner_hook = NULL;
 static ExecutorStart_hook_type prev_executor_start_hook = NULL;
+
+/*
+ * When set, DuckdbPlannerHook_Cpp immediately delegates to prev_planner_hook,
+ * bypassing all DuckDB planning logic. This is used when pg_duckdb itself needs
+ * to plan an internal Postgres query (e.g., in PostgresTableReader) so that other
+ * extensions like TimescaleDB are still called and can properly initialize their
+ * per-query state. Also used to prevent re-entrant DuckDB planning from SPI calls
+ * made within the planner hook.
+ *
+ * Note: if a PostgreSQL error (longjmp) occurs while this flag is true, it may
+ * remain set until the next successful call to PlanQueryWithoutDuckdb. Within a
+ * single backend process this is self-correcting once a successful internal plan
+ * is completed.
+ */
+static bool pgduckdb_bypass_hook = false;
 static ExecutorFinish_hook_type prev_executor_finish_hook = NULL;
 static ExplainOneQuery_hook_type prev_explain_one_query_hook = NULL;
 static emit_log_hook_type prev_emit_log_hook = NULL;
@@ -263,6 +278,9 @@ IsAllowedStatement(Query *query, bool throw_error) {
 
 static PlannedStmt *
 DuckdbPlannerHook_Cpp(Query *parse, const char *query_string, int cursor_options, ParamListInfo bound_params) {
+	if (pgduckdb_bypass_hook) {
+		return prev_planner_hook(parse, query_string, cursor_options, bound_params);
+	}
 	if (pgduckdb::IsExtensionRegistered()) {
 		if (pgduckdb::NeedsDuckdbExecution(parse)) {
 			pgduckdb::TriggerActivity();
@@ -491,6 +509,38 @@ DuckdbEmitLogHook(ErrorData *edata) {
 		pgduckdb::TriggerActivity();
 	}
 }
+
+namespace pgduckdb {
+
+/*
+ * Plan a query using the full planner hook chain, but skip pg_duckdb's own
+ * DuckDB planning logic. This ensures that other extensions (e.g., TimescaleDB)
+ * in the hook chain still get called and can properly initialize their
+ * per-query planning state — which is required before standard_planner runs
+ * their create_upper_paths_hook callbacks.
+ *
+ * Use this instead of calling standard_planner() directly whenever pg_duckdb
+ * needs to plan an internal Postgres query from within its own execution path.
+ */
+PlannedStmt *
+PlanQueryWithoutDuckdb(Query *query, const char *query_string, int cursor_options, ParamListInfo bound_params) {
+	pgduckdb_bypass_hook = true;
+	PlannedStmt *result =
+	    (planner_hook ? planner_hook : standard_planner)(query, query_string, cursor_options, bound_params);
+	pgduckdb_bypass_hook = false;
+	return result;
+}
+
+/*
+ * Temporarily bypass pg_duckdb's planner hook. Used around SPI calls made
+ * from within the planner hook to prevent re-entrant DuckDB planning.
+ */
+void
+SetBypassHook(bool bypass) {
+	pgduckdb_bypass_hook = bypass;
+}
+
+} // namespace pgduckdb
 
 void
 DuckdbInitHooks(void) {

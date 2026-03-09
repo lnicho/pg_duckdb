@@ -9,4 +9,7 @@ bool IsCatalogTable(Relation rel);
 bool ContainsPostgresTable(Node *node, void *context);
 bool NeedsDuckdbExecution(Query *query);
 bool ShouldTryToUseDuckdbExecution(Query *query);
+PlannedStmt *PlanQueryWithoutDuckdb(Query *query, const char *query_string, int cursor_options,
+                                    ParamListInfo bound_params);
+void SetBypassHook(bool bypass);
 } // namespace pgduckdb
