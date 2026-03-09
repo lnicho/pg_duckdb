@@ -525,7 +525,8 @@ namespace pgduckdb {
 PlannedStmt *
 PlanQueryWithoutDuckdb(Query *query, const char *query_string, int cursor_options, ParamListInfo bound_params) {
 	pgduckdb_bypass_hook = true;
-	PlannedStmt *result = (planner_hook ? planner_hook : standard_planner)(query, query_string, cursor_options, bound_params);
+	PlannedStmt *result =
+	    (planner_hook ? planner_hook : standard_planner)(query, query_string, cursor_options, bound_params);
 	pgduckdb_bypass_hook = false;
 	return result;
 }
